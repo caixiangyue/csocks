@@ -6,12 +6,12 @@ import (
 )
 
 type CLocal struct {
-	LocalTCPAddr  *net.TCPAddr
-	RemoteTCPAddr *net.TCPAddr
-	cipher        *Cipher
+	localTCPAddr  *net.TCPAddr
+	remoteTCPAddr *net.TCPAddr
+	cipher        *cipher
 }
 
-func NewCLocal(localAddr string, remoteAddr string, cipher *Cipher) (*CLocal, error) {
+func NewCLocal(localAddr string, remoteAddr string, cipher *cipher) (*CLocal, error) {
 	localTCPAddr, err := net.ResolveTCPAddr("tcp", localAddr)
 
 	if err != nil {
@@ -26,73 +26,32 @@ func NewCLocal(localAddr string, remoteAddr string, cipher *Cipher) (*CLocal, er
 }
 
 func (local *CLocal) Listen(printInfo func(listenAddr net.Addr)) error {
-	listener, err := net.ListenTCP("tcp", local.LocalTCPAddr)
-	if err != nil {
-		return err
-	}
-	defer listener.Close()
-
-	if printInfo != nil {
-		printInfo(listener.Addr())
-	}
-	for {
-		conn, err := listener.AcceptTCP()
-		if err != nil {
-			log.Println(err)
-			continue
-		}
-		conn.SetLinger(0)
-		go local.handleConn(conn)
-	}
+	return ListenSecureTCP(local.localTCPAddr, local.cipher, local.handleConn, printInfo)
 }
 
-func (local *CLocal) handleConn(conn *net.TCPConn) {
-	defer conn.Close()
+func (local *CLocal) handleConn(localConn *SecureTCPConn) {
+	defer localConn.Close()
 
-	remoteConn, err := net.DialTCP("tcp", nil, local.RemoteTCPAddr)
+	remoteConn, err := DialTcpSecure(local.remoteTCPAddr, local.cipher)
 	if err != nil {
-		log.Fatalln(err)
+		log.Println(err)
 		return
 	}
 
 	defer remoteConn.Close()
 
 	go func() {
-		var buf = make([]byte, 1024)
-		for {
-			readCount, readErr := remoteConn.Read(buf)
-			local.cipher.Decode(buf)
-			if readErr != nil {
-				return
-			}
-			if readCount > 0 {
-				writeCount, writeErr := conn.Write(buf[0:readCount])
-				if writeErr != nil {
-					return
-				}
-				if readCount != writeCount {
-					return
-				}
-			}
+		if err := remoteConn.DecodeCopy(localConn); err != nil {
+			//log.Println(err)
+			remoteConn.Close()
+			localConn.Close()
 		}
+
 	}()
 
-	var data = make([]byte, 1024)
-	for {
-		readCount, readErr := conn.Read(data)
-		if readErr != nil {
-			return
-		}
-		if readCount > 0 {
-			writeCount, writeErr := remoteConn.Write(local.cipher.Encode(data[0:readCount]))
-			log.Println("写服务器数据:", data[0:readCount])
-			if writeErr != nil {
-				return
-			}
-			if readCount != writeCount {
-				return
-			}
-		}
-
+	if err := localConn.EncodeCopy(remoteConn); err != nil {
+		//log.Println(err)
+		remoteConn.Close()
+		localConn.Close()
 	}
 }

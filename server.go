@@ -7,11 +7,11 @@ import (
 )
 
 type CServer struct {
-	listenAddr *net.TCPAddr
-	cipher     *Cipher
+	localTcpAddr *net.TCPAddr
+	cipher       *cipher
 }
 
-func NewCServer(listenAddr string, cipher *Cipher) (*CServer, error) {
+func NewCServer(listenAddr string, cipher *cipher) (*CServer, error) {
 	listenTCPAddr, err := net.ResolveTCPAddr("tcp", listenAddr)
 
 	if err != nil {
@@ -21,38 +21,18 @@ func NewCServer(listenAddr string, cipher *Cipher) (*CServer, error) {
 }
 
 func (server *CServer) Listen(printInfo func(listenAddr net.Addr)) error {
-	listener, err := net.ListenTCP("tcp", server.listenAddr)
-	log.Println(server.listenAddr)
-	if err != nil {
-		log.Println(err)
-		return err
-	}
-	defer listener.Close()
-	if printInfo != nil {
-		printInfo(listener.Addr())
-	}
-	for {
-		conn, err := listener.AcceptTCP()
-		if err != nil {
-			log.Println(err)
-			continue
-		}
-		go server.handleConn(conn)
-	}
+	return ListenSecureTCP(server.localTcpAddr, server.cipher, server.handleConn, printInfo)
 }
-func (server *CServer) handleConn(conn *net.TCPConn) {
-	defer conn.Close()
-	conn.SetLinger(0)
+func (server *CServer) handleConn(localConn *SecureTCPConn) {
+	defer localConn.Close()
 	buf := make([]byte, 256)
 
-	_, err := conn.Read(buf)
-	server.cipher.Decode(buf)
+	_, err := localConn.DecodeRead(buf)
 	if err != nil || buf[0] != 0x05 {
 		return
 	}
-	conn.Write(server.cipher.Encode([]byte{0x05, 0x00}))
-	n, err := conn.Read(buf)
-	server.cipher.Decode(buf)
+	localConn.EncodeWrite([]byte{0x05, 0x00})
+	n, err := localConn.DecodeRead(buf)
 
 	if err != nil && n < 7 {
 		return
@@ -64,7 +44,6 @@ func (server *CServer) handleConn(conn *net.TCPConn) {
 	var dIP []byte
 	switch buf[3] {
 	case 0x01:
-		//	IP V4 address: X'01'
 		dIP = buf[4 : 4+net.IPv4len]
 	case 0x03:
 		ipAddr, err := net.ResolveIPAddr("ip", string(buf[5:n-2]))
@@ -74,7 +53,6 @@ func (server *CServer) handleConn(conn *net.TCPConn) {
 		}
 		dIP = ipAddr.IP
 	case 0x04:
-		//	IP V6 address: X'04'
 		dIP = buf[4 : 4+net.IPv6len]
 	default:
 		return
@@ -84,7 +62,6 @@ func (server *CServer) handleConn(conn *net.TCPConn) {
 		IP:   dIP,
 		Port: int(binary.BigEndian.Uint16(dPort)),
 	}
-	log.Println(dstAddr.String())
 
 	dstServer, err := net.DialTCP("tcp", nil, dstAddr)
 	if err != nil {
@@ -93,45 +70,15 @@ func (server *CServer) handleConn(conn *net.TCPConn) {
 	} else {
 		defer dstServer.Close()
 		dstServer.SetLinger(0)
-		log.Println("连接成功")
-		conn.Write(server.cipher.Encode([]byte{0x05, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}))
+		localConn.EncodeWrite([]byte{0x05, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00})
 	}
 
 	go func() {
-		var buf = make([]byte, 1024)
-		for {
-			readCount, readErr := conn.Read(buf)
-			server.cipher.Decode(buf)
-			if readErr != nil {
-				return
-			}
-			if readCount > 0 {
-				writeCount, writeErr := dstServer.Write(buf[0:readCount])
-				if writeErr != nil {
-					return
-				}
-				if readCount != writeCount {
-					return
-				}
-			}
+		if err := localConn.DecodeCopy(dstServer); err != nil {
+			localConn.Close()
+			dstServer.Close()
 		}
 	}()
 
-	var data = make([]byte, 1024)
-	for {
-		readCount, readErr := dstServer.Read(data)
-		if readErr != nil {
-			return
-		}
-		if readCount > 0 {
-			writeCount, writeErr := conn.Write(server.cipher.Encode(data[0:readCount]))
-			if writeErr != nil {
-				return
-			}
-			if readCount != writeCount {
-				return
-			}
-		}
-
-	}
+	(&SecureTCPConn{dstServer, localConn.Cipher}).EncodeCopy(localConn)
 }

@@ -1,28 +1,26 @@
 package csocks
 
-type Cipher struct {
+type cipher struct {
 	decodeShadow []byte
 	encodeShadow []byte
 }
 
-func NewCipher(shadow []byte) *Cipher {
+func NewCipher(shadow []byte) *cipher {
 	decodeShadow := make([]byte, 256)
 	for i, v := range shadow {
 		decodeShadow[v] = byte(i)
 	}
-	return &Cipher{decodeShadow, shadow}
+	return &cipher{decodeShadow, shadow}
 }
 
-func (cipher *Cipher) Encode(buf []byte) []byte {
+func (cipher *cipher) Encode(buf []byte) {
 	for i, v := range buf {
 		buf[i] = cipher.encodeShadow[v]
 	}
-	return buf
 }
 
-func (cipher *Cipher) Decode(buf []byte) []byte {
+func (cipher *cipher) Decode(buf []byte) {
 	for i, v := range buf {
 		buf[i] = cipher.decodeShadow[v]
 	}
-	return buf
 }

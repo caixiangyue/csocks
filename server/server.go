@@ -1,19 +1,25 @@
 package main
 
 import (
-	"csocks"
+	"flag"
 	"io/ioutil"
 	"log"
 	"net"
 	"os"
-	"runtime"
+
+	"github.com/caixiangyue/csocks"
 )
 
-func main() {
+var localAddr string
 
-	runtime.GOMAXPROCS(1)
+func init() {
+	flag.StringVar(&localAddr, "l", "0.0.0.0:23456", "local address")
+}
+
+func main() {
 	config, _ := ioutil.ReadFile("config")
-	cServer, err := csocks.NewCServer("127.0.0.1:1085", csocks.NewCipher(config))
+
+	cServer, err := csocks.NewCServer(localAddr, csocks.NewCipher(config))
 
 	if err != nil {
 		log.Fatalln(err)
